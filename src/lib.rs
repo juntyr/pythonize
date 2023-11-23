@@ -18,6 +18,8 @@
 //!     bar: Option<usize>
 //! }
 //!
+//! # pyo3::prepare_freethreaded_python();
+//!
 //! Python::with_gil(|py| {
 //!     let sample = Sample {
 //!         foo: "Foo".to_string(),

@@ -453,6 +453,8 @@ mod test {
     where
         T: de::DeserializeOwned + PartialEq + std::fmt::Debug,
     {
+        pyo3::prepare_freethreaded_python();
+
         Python::with_gil(|py| {
             let locals = PyDict::new_bound(py);
             py.run_bound(&format!("obj = {}", code), None, Some(&locals))

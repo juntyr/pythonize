@@ -499,6 +499,8 @@ mod test {
     where
         T: Serialize,
     {
+        pyo3::prepare_freethreaded_python();
+
         Python::with_gil(|py| -> PyResult<()> {
             let obj = pythonize(py, &src)?;
 

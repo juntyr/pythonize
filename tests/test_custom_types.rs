@@ -63,6 +63,8 @@ impl PythonizeTypes for PythonizeCustomList {
 
 #[test]
 fn test_custom_list() {
+    pyo3::prepare_freethreaded_python();
+
     Python::with_gil(|py| {
         PySequence::register::<CustomList>(py).unwrap();
         let serialized = pythonize_custom::<PythonizeCustomList, _>(py, &json!([1, 2, 3]))
@@ -127,6 +129,8 @@ impl PythonizeTypes for PythonizeCustomDict {
 
 #[test]
 fn test_custom_dict() {
+    pyo3::prepare_freethreaded_python();
+
     Python::with_gil(|py| {
         PyMapping::register::<CustomDict>(py).unwrap();
         let serialized =
