@@ -40,6 +40,8 @@ impl Serialize for CannotSerialize {
 
 #[test]
 fn test_de_valid() {
+    pyo3::prepare_freethreaded_python();
+
     Python::with_gil(|py| {
         let pyroot = PyDict::new_bound(py);
         pyroot.set_item("root_key", "root_value").unwrap();
@@ -82,6 +84,8 @@ fn test_de_valid() {
 
 #[test]
 fn test_de_invalid() {
+    pyo3::prepare_freethreaded_python();
+
     Python::with_gil(|py| {
         let pyroot = PyDict::new_bound(py);
         pyroot.set_item("root_key", "root_value").unwrap();
@@ -106,6 +110,8 @@ fn test_de_invalid() {
 
 #[test]
 fn test_ser_valid() {
+    pyo3::prepare_freethreaded_python();
+
     Python::with_gil(|py| {
         let root = Root {
             root_key: String::from("root_value"),
@@ -181,6 +187,8 @@ fn test_ser_valid() {
 
 #[test]
 fn test_ser_invalid() {
+    pyo3::prepare_freethreaded_python();
+
     Python::with_gil(|py| {
         let root = Root {
             root_key: String::from("root_value"),
