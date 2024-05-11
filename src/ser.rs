@@ -1,6 +1,9 @@
 use std::marker::PhantomData;
 
-use pyo3::types::{IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyList, PyMapping, PySequence, PyTuple, PyTupleMethods};
+use pyo3::types::{
+    IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyList, PyMapping, PySequence, PyTuple,
+    PyTupleMethods,
+};
 use pyo3::{Bound, IntoPy, PyObject, PyResult, Python, ToPyObject};
 use serde::{ser, Serialize};
 
