@@ -1,6 +1,9 @@
 use std::marker::PhantomData;
 
-use pyo3::types::{PyAnyMethods, PyDict, PyList, PyMapping, PySequence, PyTuple};
+use pyo3::types::{
+    IntoPyDict, PyAnyMethods, PyDict, PyDictMethods, PyList, PyMapping, PySequence, PyTuple,
+    PyTupleMethods,
+};
 use pyo3::{Bound, IntoPy, PyObject, PyResult, Python, ToPyObject};
 use serde::{ser, Serialize};
 
@@ -10,6 +13,39 @@ use crate::error::{PythonizeError, Result};
 pub trait PythonizeDictType {
     /// Constructor
     fn create_mapping(py: Python) -> PyResult<Bound<PyMapping>>;
+
+    /// Constructor
+    fn create_mapping_with_items<
+        K: ToPyObject,
+        V: ToPyObject,
+        U: ExactSizeIterator<Item = (K, V)>,
+    >(
+        py: Python,
+        items: impl IntoIterator<Item = (K, V), IntoIter = U>,
+    ) -> PyResult<Bound<PyMapping>> {
+        let mapping = Self::create_mapping(py)?;
+
+        for (key, value) in items {
+            mapping.set_item(key, value)?;
+        }
+
+        Ok(mapping)
+    }
+
+    /// Constructor, allows the mappings to be named
+    fn create_mapping_with_items_name<
+        'py,
+        K: ToPyObject,
+        V: ToPyObject,
+        U: ExactSizeIterator<Item = (K, V)>,
+    >(
+        py: Python<'py>,
+        name: &str,
+        items: impl IntoIterator<Item = (K, V), IntoIter = U>,
+    ) -> PyResult<Bound<'py, PyMapping>> {
+        let _name = name;
+        Self::create_mapping_with_items(py, items)
+    }
 }
 
 /// Trait for types which can represent a Python sequence
@@ -35,6 +71,17 @@ pub trait PythonizeTypes {
 impl PythonizeDictType for PyDict {
     fn create_mapping(py: Python) -> PyResult<Bound<PyMapping>> {
         Ok(PyDict::new_bound(py).into_any().downcast_into().unwrap())
+    }
+
+    fn create_mapping_with_items<
+        K: ToPyObject,
+        V: ToPyObject,
+        U: ExactSizeIterator<Item = (K, V)>,
+    >(
+        py: Python,
+        items: impl IntoIterator<Item = (K, V), IntoIter = U>,
+    ) -> PyResult<Bound<PyMapping>> {
+        Ok(items.into_py_dict_bound(py).into_mapping())
     }
 }
 
@@ -129,27 +176,30 @@ pub struct PythonCollectionSerializer<'py, P> {
 
 #[doc(hidden)]
 pub struct PythonTupleVariantSerializer<'py, P> {
+    name: &'static str,
     variant: &'static str,
     inner: PythonCollectionSerializer<'py, P>,
 }
 
 #[doc(hidden)]
 pub struct PythonStructVariantSerializer<'py, P: PythonizeTypes> {
+    name: &'static str,
     variant: &'static str,
-    inner: PythonDictSerializer<'py, P>,
+    inner: PythonStructDictSerializer<'py, P>,
 }
 
 #[doc(hidden)]
-pub struct PythonDictSerializer<'py, P: PythonizeTypes> {
+pub struct PythonStructDictSerializer<'py, P: PythonizeTypes> {
     py: Python<'py>,
-    dict: Bound<'py, PyMapping>,
+    name: &'static str,
+    fields: Vec<(&'static str, PyObject)>,
     _types: PhantomData<P>,
 }
 
 #[doc(hidden)]
 pub struct PythonMapSerializer<'py, P: PythonizeTypes> {
     py: Python<'py>,
-    map: Bound<'py, PyMapping>,
+    items: Vec<(PyObject, PyObject)>,
     key: Option<PyObject>,
     _types: PhantomData<P>,
 }
@@ -162,7 +212,7 @@ impl<'py, P: PythonizeTypes> ser::Serializer for Pythonizer<'py, P> {
     type SerializeTupleStruct = PythonCollectionSerializer<'py, P>;
     type SerializeTupleVariant = PythonTupleVariantSerializer<'py, P>;
     type SerializeMap = PythonMapSerializer<'py, P>;
-    type SerializeStruct = PythonDictSerializer<'py, P>;
+    type SerializeStruct = PythonStructDictSerializer<'py, P>;
     type SerializeStructVariant = PythonStructVariantSerializer<'py, P>;
 
     fn serialize_bool(self, v: bool) -> Result<PyObject> {
@@ -258,7 +308,7 @@ impl<'py, P: PythonizeTypes> ser::Serializer for Pythonizer<'py, P> {
 
     fn serialize_newtype_variant<T>(
         self,
-        _name: &'static str,
+        name: &'static str,
         _variant_index: u32,
         variant: &'static str,
         value: &T,
@@ -266,9 +316,12 @@ impl<'py, P: PythonizeTypes> ser::Serializer for Pythonizer<'py, P> {
     where
         T: ?Sized + Serialize,
     {
-        let d = PyDict::new_bound(self.py);
-        d.set_item(variant, value.serialize(self)?)?;
-        Ok(d.into())
+        let m = P::Map::create_mapping_with_items_name(
+            self.py,
+            name,
+            [(variant, value.serialize(self)?)],
+        )?;
+        Ok(m.into())
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<PythonCollectionSerializer<'py, P>> {
@@ -301,18 +354,22 @@ impl<'py, P: PythonizeTypes> ser::Serializer for Pythonizer<'py, P> {
 
     fn serialize_tuple_variant(
         self,
-        _name: &'static str,
+        name: &'static str,
         _variant_index: u32,
         variant: &'static str,
         len: usize,
     ) -> Result<PythonTupleVariantSerializer<'py, P>> {
         let inner = self.serialize_tuple(len)?;
-        Ok(PythonTupleVariantSerializer { variant, inner })
+        Ok(PythonTupleVariantSerializer {
+            name,
+            variant,
+            inner,
+        })
     }
 
-    fn serialize_map(self, _len: Option<usize>) -> Result<PythonMapSerializer<'py, P>> {
+    fn serialize_map(self, len: Option<usize>) -> Result<PythonMapSerializer<'py, P>> {
         Ok(PythonMapSerializer {
-            map: P::Map::create_mapping(self.py)?,
+            items: Vec::with_capacity(len.unwrap_or(0)),
             key: None,
             py: self.py,
             _types: PhantomData,
@@ -321,28 +378,31 @@ impl<'py, P: PythonizeTypes> ser::Serializer for Pythonizer<'py, P> {
 
     fn serialize_struct(
         self,
-        _name: &'static str,
-        _len: usize,
-    ) -> Result<PythonDictSerializer<'py, P>> {
-        Ok(PythonDictSerializer {
-            dict: P::Map::create_mapping(self.py)?,
+        name: &'static str,
+        len: usize,
+    ) -> Result<PythonStructDictSerializer<'py, P>> {
+        Ok(PythonStructDictSerializer {
             py: self.py,
+            name,
+            fields: Vec::with_capacity(len),
             _types: PhantomData,
         })
     }
 
     fn serialize_struct_variant(
         self,
-        _name: &'static str,
+        name: &'static str,
         _variant_index: u32,
         variant: &'static str,
-        _len: usize,
+        len: usize,
     ) -> Result<PythonStructVariantSerializer<'py, P>> {
         Ok(PythonStructVariantSerializer {
+            name,
             variant,
-            inner: PythonDictSerializer {
-                dict: P::Map::create_mapping(self.py)?,
+            inner: PythonStructDictSerializer {
                 py: self.py,
+                name: variant,
+                fields: Vec::with_capacity(len),
                 _types: PhantomData,
             },
         })
@@ -411,9 +471,12 @@ impl<'py, P: PythonizeTypes> ser::SerializeTupleVariant for PythonTupleVariantSe
     }
 
     fn end(self) -> Result<PyObject> {
-        let d = PyDict::new_bound(self.inner.py);
-        d.set_item(self.variant, ser::SerializeTuple::end(self.inner)?)?;
-        Ok(d.into())
+        let m = P::Map::create_mapping_with_items_name(
+            self.inner.py,
+            self.name,
+            [(self.variant, ser::SerializeTuple::end(self.inner)?)],
+        )?;
+        Ok(m.into())
     }
 }
 
@@ -433,21 +496,22 @@ impl<'py, P: PythonizeTypes> ser::SerializeMap for PythonMapSerializer<'py, P> {
     where
         T: ?Sized + Serialize,
     {
-        self.map.set_item(
+        self.items.push((
             self.key
                 .take()
                 .expect("serialize_value should always be called after serialize_key"),
             pythonize_custom::<P, _>(self.py, value)?,
-        )?;
+        ));
         Ok(())
     }
 
     fn end(self) -> Result<PyObject> {
-        Ok(self.map.into())
+        let m = P::Map::create_mapping_with_items(self.py, self.items)?;
+        Ok(m.into())
     }
 }
 
-impl<'py, P: PythonizeTypes> ser::SerializeStruct for PythonDictSerializer<'py, P> {
+impl<'py, P: PythonizeTypes> ser::SerializeStruct for PythonStructDictSerializer<'py, P> {
     type Ok = PyObject;
     type Error = PythonizeError;
 
@@ -455,13 +519,14 @@ impl<'py, P: PythonizeTypes> ser::SerializeStruct for PythonDictSerializer<'py, 
     where
         T: ?Sized + Serialize,
     {
-        Ok(self
-            .dict
-            .set_item(key, pythonize_custom::<P, _>(self.py, value)?)?)
+        self.fields
+            .push((key, pythonize_custom::<P, _>(self.py, value)?));
+        Ok(())
     }
 
     fn end(self) -> Result<PyObject> {
-        Ok(self.dict.into())
+        let m = P::Map::create_mapping_with_items_name(self.py, self.name, self.fields)?;
+        Ok(m.into())
     }
 }
 
@@ -474,15 +539,20 @@ impl<'py, P: PythonizeTypes> ser::SerializeStructVariant for PythonStructVariant
         T: ?Sized + Serialize,
     {
         self.inner
-            .dict
-            .set_item(key, pythonize_custom::<P, _>(self.inner.py, value)?)?;
+            .fields
+            .push((key, pythonize_custom::<P, _>(self.inner.py, value)?));
         Ok(())
     }
 
     fn end(self) -> Result<PyObject> {
-        let d = PyDict::new_bound(self.inner.py);
-        d.set_item(self.variant, self.inner.dict)?;
-        Ok(d.into())
+        let v = P::Map::create_mapping_with_items_name(
+            self.inner.py,
+            self.inner.name,
+            self.inner.fields,
+        )?;
+        let m =
+            P::Map::create_mapping_with_items_name(self.inner.py, self.name, [(self.variant, v)])?;
+        Ok(m.into())
     }
 }
 
